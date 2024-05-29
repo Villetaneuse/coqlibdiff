@@ -73,6 +73,8 @@ join_lines()
 	'
 }
 
+# parse and check arguments/options
+
 dir=$(pwd)
 while getopts d: name; do
 	case $name in
@@ -119,7 +121,7 @@ cd "$rep"
 trap 'rm -v "$tmp_all"' INT EXIT HUP TERM QUIT
 
 # before
-if ! git switch "$before"; then
+if ! git switch --detach "$before"; then
 	printf "%s: cannot switch to %s in repository\n" "$0" "$before" 2>&1
 	exit 2
 fi
@@ -129,14 +131,14 @@ if ! $make_cmd; then
 	exit 2
 fi
 
-coqreqall >"$tmp_all"
+coqreqall "$rep" "$libname" >"$tmp_all"
 printf '%s\n' "$ns_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
 	>"$dir"/namespace.before
 printf '%s\n' "$se_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
 	>"$dir"/search.before
 
 # after
-if ! git switch "$after"; then
+if ! git switch --detach "$after"; then
 	printf "%s: cannot switch to %s in repository\n" "$0" "$after" 2>&1
 	exit 2
 fi
@@ -146,7 +148,7 @@ if ! $make_cmd; then
 	exit 2
 fi
 
-coqreqall >"$tmp_all"
+coqreqall "$rep" "$libname" >"$tmp_all"
 printf '%s\n' "$ns_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
 	>"$dir"/namespace.after
 printf '%s\n' "$se_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
