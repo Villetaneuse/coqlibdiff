@@ -1,0 +1,159 @@
+#!/bin/sh
+#
+# coqlibdiff - find differences between two versions of a Coq library
+#
+# Copyright (C) 2024 Pierre Rousselin (rousselin@math.univ-paris13.fr)
+
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+#
+# Dependency: the coqreqall script (in the same repository) should be installed
+
+usage()
+{
+    cat <<EOF
+Usage: coqlibdiff [-d DIR] REP GIT_BEFORE GIT_AFTER [LIBNAME] [MAKE_CMD]
+find user-visible differences between two (git) versions of a Coq library
+[DIR] defaults to the current working directory
+[LIBNAME] defaults to Coq
+[MAKE_CMD] defaults to "make world" if LIBNAME is Coq, else to "make"
+
+Example:
+	coqlibdiff -d ~/testlib ~/myreps/coq master my_branch
+
+This program generates the following files in DIR:
+- namespace.before, namespace.after and namespace.diff to compare the outputs
+  of "Print Namespace LIBNAME." after every file in library LIBNAME has been
+  required, that is, every constant defined in the library LIBNAME.
+- search.before, search.after and search.diff to compare the outputs of
+  "Search _." after every file in library LIBNAME has been required.
+
+These can be different for the following reason:
+- Some lemmas could be blacklisted from Search.
+- LIBNAME will probably require external library files which will be listed by
+  Search but not by Print Namespace.
+EOF
+}
+
+# join sequences of indented lines with the last unindented line
+# reads standard input and writes on standard output
+# modified from
+# https://stackoverflow.com/questions/9999934/sed-joining-lines-depending-on-the-second-one
+join_lines()
+{
+	awk '
+		NR == 1 {
+			hold = $0
+			next
+		}
+		/^[ ]+/ {
+			gsub(/^[ \t]+/, " ", $0)
+			hold = hold $0
+			next
+		}
+		{
+			printf("%s\n", hold)
+			hold = $0
+		}
+		END {
+			if (hold)
+				print hold
+		}
+	'
+}
+
+dir=$(pwd)
+while getopts d: name; do
+	case $name in
+	d)
+		dir="$OPTARG"
+	;;
+	?) usage; exit 2
+	esac
+done
+shift $(($OPTIND - 1))
+
+# We need dir to be absolute:
+dir=$(cd "$dir"; pwd)
+
+case $# in
+0 | 1 | 2) usage; exit 2
+esac
+
+if ! [ -d "$1" ]; then
+	printf '%s: %s: No such directory\n' "$(basename "$0")" "$1"
+	usage
+	exit 1
+fi
+rep=$1
+
+before=$2
+after=$3
+libname=${4:-Coq}
+
+if [ -n "$5" ]; then
+	make_cmd="$5"
+elif [ "$libname" = "Coq" ]; then
+	make_cmd="make world"
+else
+	make_cmd="make"
+fi
+
+tmprefix=tmp$$
+ns_cmd="Print Namespace $libname."
+se_cmd="Search _."
+tmp_all=$dir/${tmprefix}_all.v
+cd "$rep"
+
+trap 'rm -v "$tmp_all"' INT EXIT HUP TERM QUIT
+
+# before
+if ! git switch "$before"; then
+	printf "%s: cannot switch to %s in repository\n" "$0" "$before" 2>&1
+	exit 2
+fi
+
+if ! $make_cmd; then
+	printf "%s: command %s has failed\n" "$0" "$make_cmd" 2>&1
+	exit 2
+fi
+
+coqreqall >"$tmp_all"
+printf '%s\n' "$ns_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
+	>"$dir"/namespace.before
+printf '%s\n' "$se_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
+	>"$dir"/search.before
+
+# after
+if ! git switch "$after"; then
+	printf "%s: cannot switch to %s in repository\n" "$0" "$after" 2>&1
+	exit 2
+fi
+
+if ! $make_cmd; then
+	printf "%s: command %s has failed\n" "$0" "$make_cmd" 2>&1
+	exit 2
+fi
+
+coqreqall >"$tmp_all"
+printf '%s\n' "$ns_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
+	>"$dir"/namespace.after
+printf '%s\n' "$se_cmd" | coqtop -l "$tmp_all" | join_lines | sort \
+	>"$dir"/search.after
+
+# diff
+diff "$dir"/namespace.after "$dir"/namespace.before | grep : \
+	>"$dir"/namespace.diff
+diff "$dir"/search.after "$dir"/search.before | grep : \
+	>"$dir"/search.diff

@@ -1,0 +1,86 @@
+#!/bin/sh
+#
+# coqreqall - write a Coq file requiring all the content of a Coq library
+#
+# Copyright (C) 2024 Pierre Rousselin (rousselin@math.univ-paris13.fr)
+
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Lesser General Public
+# License as published by the Free Software Foundation; either
+# version 2.1 of the License, or (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public
+# License along with this library; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
+usage()
+{
+	cat <<EOF
+Usage: coqreqall [PATH_TO_LIB] [LIBNAME]
+write to standard output a file requiring all .v files in a library
+[LIBNAME] defaults to Coq
+[PATH_TO_LIB] defaults to where the current coqc program finds Coq's stdlib
+
+Example:
+	coqreqall $(coqc -where)/user-contrib/Equations Equations >AllEquations.v
+EOF
+}
+
+case $1 in
+-h | --help)
+	usage
+	exit 0
+esac
+
+libdir=${1:-$(coqc -where)/theories}
+libname=${2:-Coq}
+
+if ! [ -d "$libdir" ]; then
+	printf '%s\n' "$0: $libdir: No such directory" 1>&2
+	exit 1
+fi
+
+LIB_FMT="(** * All the files in library $libname *)\n\n"
+printf "$LIB_FMT"
+
+# $1: directory to list
+# $2: sublib name (prefix)
+# $3: level
+iter_sublib()
+{
+	# Header
+	i=0 stars="*" subs=""
+	while [ "$i" -lt "$3" ]; do
+		stars=${stars}"*"
+		subs=${subs}"sub"
+		i=$(($i + 1))
+	done
+	printf '%s\n\n' "(** $stars $2 ${subs}library *)"
+
+	new_line=0
+	# Regular .v file requirement
+	for f in "$1"/*.v; do
+		if ! [ -f "$f" ]; then continue; fi
+		printf "From $2 Require %s.\n" "$(basename $f .v)"
+			new_line=1
+		done
+
+	if [ "$new_line" -eq 1 ]; then
+		new_line=0
+		printf '\n'
+	fi
+
+	# Recursive calls
+	for d in "$1"/*/; do
+		if ! [ -d "$d" ]; then continue; fi
+		iter_sublib "$d" "$2.$(basename "$d")" "$(($3 + 1))"
+	done
+}
+
+# iterate on the library and remove last newline
+iter_sublib "$libdir" "$libname" 0 | sed '$d'
